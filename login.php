@@ -4,22 +4,39 @@ require 'db.php';
 
 $error = "";
 
+// If already logged in, send them to the right page
+if (isset($_SESSION['logged_in'], $_SESSION['user_id']) && $_SESSION['logged_in'] === true) {
+    header("Location: " . (($_SESSION['role'] ?? '') === 'admin' ? "admin.php" : "user.php"));
+    exit();
+}
+
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    $username = $_POST['username'];
-    $password = $_POST['password'];
+    $username = isset($_POST['username']) ? trim($_POST['username']) : '';
+    $password = isset($_POST['password']) ? $_POST['password'] : '';
 
     // 1. Fetch user safely using PDO
     $stmt = $pdo->prepare("SELECT * FROM Users WHERE username = :username");
     $stmt->execute(array('username' => $username));
-    $user = $stmt->fetch();
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
-    // 2. Verify and hand out the wristband
-    if ($user && $password === $user['password']) {
+    // 2. Verify password (supports hashed passwords, and plain text for older accounts)
+    $valid = false;
+    if ($user) {
+        $stored = (string)$user['password'];
+        $valid = password_verify($password, $stored) || hash_equals($stored, $password);
+    }
+
+    // 3. Hand out the wristband
+    if ($valid) {
+        session_regenerate_id(true); // prevents session fixation
+
         $_SESSION['logged_in'] = true;
-        $_SESSION['username'] = $user['username'];
-        $_SESSION['role'] = $user['role']; // Crucial for authorization!
+        // NOTE: change 'id' to your real primary key column name if it's different
+        $_SESSION['user_id']   = $user['id'] ?? $user['user_id'];
+        $_SESSION['username']  = $user['username'];
+        $_SESSION['role']      = $user['role']; // Crucial for authorization!
 
-        // 3. The Traffic Cop (Redirection)
+        // 4. The Traffic Cop (Redirection)
         if ($user['role'] === 'admin') {
             header("Location: admin.php");
             exit();
@@ -32,13 +49,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Login - Electronic Red</title>
+    <title>System Login | Electronic Red</title>
     <style>
         * {
             box-sizing: border-box;
@@ -48,23 +64,80 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         body {
-            background: radial-gradient(circle at center, #1c0c0e 0%, #0a0405 100%);
+            min-height: 100vh;
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            padding: 20px;
             color: #fff;
+            background: radial-gradient(circle at center, #1c0c0e 0%, #0a0405 100%);
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Background decorations */
+        body::before,
+        body::after {
+            content: "";
+            position: fixed;
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        body::before {
+            width: 300px;
+            height: 300px;
+            top: -130px;
+            left: -120px;
+            background: #ff1a40;
+            opacity: 0.15;
+            filter: blur(40px);
+        }
+
+        body::after {
+            width: 280px;
+            height: 280px;
+            bottom: -120px;
+            right: -100px;
+            background: #b3001f;
+            opacity: 0.15;
+            filter: blur(40px);
+        }
+
+        .container {
+            width: 100%;
+            max-width: 400px;
+            position: relative;
+            z-index: 2;
         }
 
         .login-card {
             background: rgba(255, 0, 51, 0.03);
             backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 51, 85, 0.2);
             padding: 40px;
-            border-radius: 12px;
+            border-radius: 16px;
             box-shadow: 0 8px 32px 0 rgba(255, 0, 51, 0.15), inset 0 0 15px rgba(255, 51, 85, 0.05);
-            width: 100%;
-            max-width: 400px;
+            animation: fadeIn 0.6s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-icon {
+            width: 65px;
+            height: 65px;
+            margin: 0 auto 20px auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 14px;
+            background: linear-gradient(135deg, #ff1a40 0%, #b3001f 100%);
+            font-size: 30px;
+            box-shadow: 0 4px 20px rgba(255, 26, 64, 0.4);
         }
 
         .login-card h2 {
@@ -107,6 +180,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             transition: all 0.3s ease;
         }
 
+        .input-group input::placeholder {
+            color: #6b5559;
+        }
+
         .input-group input:focus {
             outline: none;
             border-color: #ff3355;
@@ -146,32 +223,51 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             border: 1px solid rgba(255, 51, 51, 0.4);
             box-shadow: 0 0 10px rgba(255, 51, 51, 0.1);
         }
+
+        .footer {
+            text-align: center;
+            color: #8c7378;
+            font-size: 11px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 480px) {
+            .login-card { padding: 30px 22px; }
+        }
     </style>
 </head>
 <body>
 
+<div class="container">
     <div class="login-card">
-        <form method="POST">
+        <div class="user-icon">🔐</div>
+
+        <form method="POST" autocomplete="on">
             <h2>System Access</h2>
             <p class="subtitle">Authenticate to enter the neural network</p>
 
             <?php if (!empty($error)): ?>
-                <div class="error-message"><?php echo htmlspecialchars($error); ?></div>
+                <div class="error-message"><?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?></div>
             <?php endif; ?>
 
             <div class="input-group">
-                <label>Username</label>
-                <input type="text" name="username" placeholder="Enter your username" required>
+                <label for="username">Username</label>
+                <input type="text" id="username" name="username" placeholder="Enter your username" required autofocus>
             </div>
 
             <div class="input-group">
-                <label>Password</label>
-                <input type="password" name="password" placeholder="••••••••" required>
+                <label for="password">Password</label>
+                <input type="password" id="password" name="password" placeholder="••••••••" required>
             </div>
 
             <button type="submit">Authorize</button>
         </form>
     </div>
+
+    <div class="footer">
+        Secure Portal &bull; Electronic Red
+    </div>
+</div>
 
 </body>
 </html>
